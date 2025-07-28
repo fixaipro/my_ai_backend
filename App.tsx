@@ -1,30 +1,55 @@
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { Chat } from '@google/genai';
 import { Sidebar } from './components/Sidebar';
 import { ChatWindow } from './components/ChatWindow';
 import { MessageInput } from './components/MessageInput';
-import { ApiKeyModal } from './components/ApiKeyModal';
 import { ChatMessage, Tool } from './types';
 import { TOOLS } from './constants';
-import { startChatSession } from './services/geminiService';
-
-const API_KEY_STORAGE_KEY = 'gemini-api-key';
+import { startChatSession, getApiKey } from './services/geminiService';
 
 const App: React.FC = () => {
-  const [apiKey, setApiKey] = useState<string | null>(() => localStorage.getItem(API_KEY_STORAGE_KEY));
   const [activeTool, setActiveTool] = useState<Tool>(TOOLS[0]);
   const [chatSession, setChatSession] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
+  const [isKeyAvailable, setIsKeyAvailable] = useState<boolean | null>(null);
 
-  const initializeChat = useCallback(async () => {
-    if (!apiKey) return;
-
+  const initializeChat = useCallback(() => {
     setIsLoading(true);
-    setError(null);
+    setMessages([]);
+
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      setIsKeyAvailable(false);
+      setMessages([
+        {
+          id: 'error-message',
+          role: 'model',
+          content: `## API Key Not Found
+
+**Error:** Could not connect to the AI service.
+
+Please ensure your API key is configured correctly in your hosting environment's secret variables.
+
+**Required Build Command:**
+For services like Render, set your build command to:
+\`\`\`
+echo "window._env_ = { API_KEY: '$API_KEY' }" > env.js
+\`\`\`
+`,
+        },
+      ]);
+      setIsLoading(false);
+      return;
+    }
+    
+    setIsKeyAvailable(true);
     try {
-      const newChatSession = await startChatSession(apiKey, activeTool.systemInstruction);
+      const newChatSession = startChatSession(activeTool.systemInstruction);
+      if (!newChatSession) {
+        throw new Error("Failed to initialize chat session; the AI client could not be created.");
+      }
       setChatSession(newChatSession);
       setMessages([
         {
@@ -33,39 +58,32 @@ const App: React.FC = () => {
           content: `Hello! I'm now acting as a ${activeTool.name}. How can I help you today?`,
         },
       ]);
-    } catch (err) {
-      console.error("Failed to initialize chat session:", err);
-      setError('Could not start a chat session. Please ensure your API key is valid and has access to the Gemini API.');
-      setApiKey(null); // Clear the invalid key
-      localStorage.removeItem(API_KEY_STORAGE_KEY);
+    } catch (error) {
+      console.error("Failed to initialize chat session:", error);
+      const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
+      setMessages([
+        {
+          id: 'error-message',
+          role: 'model',
+          content: `**Error:** Could not start a chat session. \n**Details:** ${errorMessage}`,
+        },
+      ]);
     } finally {
       setIsLoading(false);
     }
-  }, [apiKey, activeTool]);
+  }, [activeTool]);
 
   useEffect(() => {
-    // Only initialize if an API key is present
-    if (apiKey) {
-      initializeChat();
-    }
-  }, [apiKey, initializeChat]);
-
-  const handleSaveApiKey = (newKey: string) => {
-    localStorage.setItem(API_KEY_STORAGE_KEY, newKey);
-    setApiKey(newKey);
-    setError(null);
-  };
+    // A small delay to ensure env.js has loaded
+    setTimeout(initializeChat, 50);
+  }, [initializeChat]);
 
   const handleSelectTool = (tool: Tool) => {
     setActiveTool(tool);
-    // Re-initialize chat with the new persona
-    if (apiKey) {
-      initializeChat();
-    }
   };
 
   const handleSendMessage = async (messageText: string) => {
-    if (!chatSession || isLoading) return;
+    if (!chatSession || isLoading || !isKeyAvailable) return;
 
     setIsLoading(true);
     const userMessage: ChatMessage = {
@@ -73,17 +91,16 @@ const App: React.FC = () => {
       role: 'user',
       content: messageText,
     };
-    
+    const updatedMessages = [...messages, userMessage];
+    setMessages(updatedMessages);
+
     const modelMessageId = (Date.now() + 1).toString();
-    setMessages(prevMessages => [
-      ...prevMessages,
-      userMessage,
-      {
+    const modelMessage: ChatMessage = {
         id: modelMessageId,
         role: 'model',
-        content: '', // Empty content will trigger the typing indicator
-      },
-    ]);
+        content: '',
+    };
+    setMessages([...updatedMessages, modelMessage]);
 
     try {
       const stream = await chatSession.sendMessageStream({ message: messageText });
@@ -98,19 +115,19 @@ const App: React.FC = () => {
         );
       }
 
-    } catch (err) {
-      console.error("Error sending message:", err);
-      setMessages(prev => prev.map(msg => 
-        msg.id === modelMessageId ? { ...msg, content: 'Sorry, I encountered an error. This could be due to a network issue or a problem with the API key. Please try again.' } : msg
-      ));
+    } catch (error) {
+      console.error("Error sending message:", error);
+      setMessages(prev => [...prev.slice(0, -1), {
+          id: modelMessageId,
+          role: 'model',
+          content: 'Sorry, I encountered an error. Please try again.',
+      }]);
     } finally {
       setIsLoading(false);
     }
   };
 
-  if (!apiKey) {
-    return <ApiKeyModal onSave={handleSaveApiKey} error={error} />;
-  }
+  const ActiveIcon = activeTool.icon;
 
   return (
     <div className="flex h-screen font-sans bg-gray-900 text-gray-100">
@@ -122,16 +139,16 @@ const App: React.FC = () => {
       <div className="flex flex-col flex-1">
         <header className="bg-gray-800/50 backdrop-blur-sm border-b border-gray-700 p-4 shadow-md z-10">
           <h1 className="text-xl font-bold flex items-center gap-3">
-            {activeTool.icon}
+            <ActiveIcon />
             {activeTool.name}
           </h1>
           <p className="text-sm text-gray-400 mt-1">{activeTool.description}</p>
         </header>
         <main className="flex-1 overflow-y-auto p-4 md:p-6">
-          <ChatWindow messages={messages} activeTool={activeTool} />
+          <ChatWindow messages={messages} isLoading={isLoading} activeTool={activeTool} />
         </main>
         <footer className="p-4 md:p-6 border-t border-gray-700 bg-gray-900">
-          <MessageInput onSendMessage={handleSendMessage} isLoading={isLoading} />
+          <MessageInput onSendMessage={handleSendMessage} isLoading={isLoading || !isKeyAvailable} />
         </footer>
       </div>
     </div>
