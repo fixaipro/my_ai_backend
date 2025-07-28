@@ -9,6 +9,7 @@ interface ToolIconProps {
 }
 
 export const ToolIcon: React.FC<ToolIconProps> = ({ tool, isActive, onClick }) => {
+  const Icon = tool.icon;
   return (
     <button
       onClick={onClick}
@@ -18,7 +19,7 @@ export const ToolIcon: React.FC<ToolIconProps> = ({ tool, isActive, onClick }) =
           : 'text-gray-300 hover:bg-gray-700/50'
       }`}
     >
-      <div className="flex-shrink-0">{tool.icon}</div>
+      <div className="flex-shrink-0"><Icon /></div>
       <span>{tool.name}</span>
     </button>
   );
