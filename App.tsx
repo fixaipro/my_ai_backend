@@ -1,23 +1,30 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { Chat } from '@google/genai';
 import { Sidebar } from './components/Sidebar';
 import { ChatWindow } from './components/ChatWindow';
 import { MessageInput } from './components/MessageInput';
+import { ApiKeyModal } from './components/ApiKeyModal';
 import { ChatMessage, Tool } from './types';
 import { TOOLS } from './constants';
 import { startChatSession } from './services/geminiService';
 
+const API_KEY_STORAGE_KEY = 'gemini-api-key';
+
 const App: React.FC = () => {
+  const [apiKey, setApiKey] = useState<string | null>(() => localStorage.getItem(API_KEY_STORAGE_KEY));
   const [activeTool, setActiveTool] = useState<Tool>(TOOLS[0]);
   const [chatSession, setChatSession] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const initializeChat = useCallback(() => {
+  const initializeChat = useCallback(async () => {
+    if (!apiKey) return;
+
     setIsLoading(true);
+    setError(null);
     try {
-      const newChatSession = startChatSession(activeTool.systemInstruction);
+      const newChatSession = await startChatSession(apiKey, activeTool.systemInstruction);
       setChatSession(newChatSession);
       setMessages([
         {
@@ -26,26 +33,35 @@ const App: React.FC = () => {
           content: `Hello! I'm now acting as a ${activeTool.name}. How can I help you today?`,
         },
       ]);
-    } catch (error) {
-      console.error("Failed to initialize chat session:", error);
-      setMessages([
-        {
-          id: 'error-message',
-          role: 'model',
-          content: 'Error: Could not start a chat session. Please check your API key and network connection.',
-        },
-      ]);
+    } catch (err) {
+      console.error("Failed to initialize chat session:", err);
+      setError('Could not start a chat session. Please ensure your API key is valid and has access to the Gemini API.');
+      setApiKey(null); // Clear the invalid key
+      localStorage.removeItem(API_KEY_STORAGE_KEY);
     } finally {
       setIsLoading(false);
     }
-  }, [activeTool]);
+  }, [apiKey, activeTool]);
 
   useEffect(() => {
-    initializeChat();
-  }, [initializeChat]);
+    // Only initialize if an API key is present
+    if (apiKey) {
+      initializeChat();
+    }
+  }, [apiKey, initializeChat]);
+
+  const handleSaveApiKey = (newKey: string) => {
+    localStorage.setItem(API_KEY_STORAGE_KEY, newKey);
+    setApiKey(newKey);
+    setError(null);
+  };
 
   const handleSelectTool = (tool: Tool) => {
     setActiveTool(tool);
+    // Re-initialize chat with the new persona
+    if (apiKey) {
+      initializeChat();
+    }
   };
 
   const handleSendMessage = async (messageText: string) => {
@@ -58,7 +74,6 @@ const App: React.FC = () => {
       content: messageText,
     };
     
-    // Add user message and an empty model message shell to the chat
     const modelMessageId = (Date.now() + 1).toString();
     setMessages(prevMessages => [
       ...prevMessages,
@@ -83,15 +98,19 @@ const App: React.FC = () => {
         );
       }
 
-    } catch (error) {
-      console.error("Error sending message:", error);
+    } catch (err) {
+      console.error("Error sending message:", err);
       setMessages(prev => prev.map(msg => 
-        msg.id === modelMessageId ? { ...msg, content: 'Sorry, I encountered an error. Please try again.' } : msg
+        msg.id === modelMessageId ? { ...msg, content: 'Sorry, I encountered an error. This could be due to a network issue or a problem with the API key. Please try again.' } : msg
       ));
     } finally {
       setIsLoading(false);
     }
   };
+
+  if (!apiKey) {
+    return <ApiKeyModal onSave={handleSaveApiKey} error={error} />;
+  }
 
   return (
     <div className="flex h-screen font-sans bg-gray-900 text-gray-100">
