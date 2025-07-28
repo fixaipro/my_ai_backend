@@ -1,0 +1,7 @@
+
+{
+  "name": "Gemini AI Chatbot",
+  "description": "A versatile chatbot application that allows users to interact with different AI personas powered by the Gemini API. Switch between tools like a general assistant, code generator, and creative writer.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
